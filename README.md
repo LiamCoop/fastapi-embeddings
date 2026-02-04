@@ -189,3 +189,16 @@ This service is called by the Go backend's `EmbeddingService` client during:
 2. **Retrieval**: Embedding user queries for semantic search
 
 The backend expects the response format defined in `EmbedResponse` and uses the `dim` field to route embeddings to the correct dimension-specific table (e.g., `embeddings_384`, `embeddings_768`).
+
+## Deployment
+
+### Railway
+
+This service is ready to be deployed on [Railway](https://railway.app/).
+
+1. Fork or push this repository to GitHub.
+2. In Railway, create a new project and select "Deploy from GitHub repo".
+3. Select this repository.
+4. Railway will automatically detect the `Dockerfile` and build the service.
+5. (Optional) Set the `EMBED_MODEL` environment variable in Railway settings to use a different model.
+
