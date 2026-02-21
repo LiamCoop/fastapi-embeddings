@@ -1,0 +1,13 @@
+.env
+
+# Frontend
+frontend/node_modules
+frontend/.next
+frontend/.env
+frontend/.env.local
+frontend/.env.*.local
+frontend/.claude
+backend/.gocache
+backend/.gomodcache
+backend/.env.docker
+frontend/.env.docker

@@ -1,0 +1,118 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  clerkId   String   @id @map("clerkId")
+  email     String   @unique
+  firstName String?  @map("firstName")
+  lastName  String?  @map("lastName")
+  createdAt DateTime @default(now()) @map("createdAt")
+  updatedAt DateTime @updatedAt @map("updatedAt")
+
+  @@map("users")
+}
+
+model Organization {
+  id                String    @id @default(uuid()) @db.Uuid
+  name              String
+  slug              String    @unique
+  stripeCustomerId  String?   @map("stripeCustomerId")
+  plan              String    @default("free")
+  planExpiresAt     DateTime? @map("planExpiresAt") @db.Timestamptz(6)
+  isActive          Boolean   @default(true) @map("isActive")
+  settings          Json      @default("{}")
+  createdAt         DateTime  @default(now()) @map("createdAt") @db.Timestamptz(6)
+  updatedAt         DateTime  @updatedAt @map("updatedAt") @db.Timestamptz(6)
+
+  @@map("organizations")
+}
+
+model OrganizationMembership {
+  id               String    @id @default(uuid()) @db.Uuid
+  organizationId   String    @map("organizationId") @db.Uuid
+  userClerkId      String    @map("userClerkId")
+  role             String    @default("member")
+  acceptedAt       DateTime? @map("acceptedAt") @db.Timestamptz(6)
+  invitedByClerkId String?   @map("invitedByClerkId")
+  createdAt        DateTime  @default(now()) @map("createdAt") @db.Timestamptz(6)
+
+  @@unique([organizationId, userClerkId])
+  @@map("organization_memberships")
+}
+
+model KnowledgeBase {
+  id        String   @id @db.Uuid
+  name      String
+  metadata  Json     @default("{}")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("knowledge_bases")
+}
+
+model KnowledgeBaseSettings {
+  kbId               String   @id @map("kbId") @db.Uuid
+  organizationId     String   @map("organizationId") @db.Uuid
+  displayName        String?  @map("displayName")
+  retrievalSettings  Json     @default("{}") @map("retrievalSettings")
+  evaluationSettings Json     @default("{}") @map("evaluationSettings")
+  isVisible          Boolean  @default(true) @map("isVisible")
+  createdAt          DateTime @default(now()) @map("createdAt") @db.Timestamptz(6)
+  updatedAt          DateTime @updatedAt @map("updatedAt") @db.Timestamptz(6)
+
+  @@map("knowledge_base_settings")
+}
+
+model Document {
+  id              String   @id @db.Uuid
+  kbId            String   @map("kb_id") @db.Uuid
+  path            String
+  title           String?
+  documentType    String   @map("document_type")
+  sourceMetadata  Json     @default("{}") @map("source_metadata")
+  activeVersionId String?  @map("active_version_id") @db.Uuid
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@unique([kbId, path])
+  @@map("documents")
+}
+
+model DocumentVersion {
+  id                   String   @id @db.Uuid
+  documentId           String   @map("document_id") @db.Uuid
+  kbId                 String   @map("kb_id") @db.Uuid
+  versionNumber        Int      @map("version_number")
+  rawContentUri        String   @map("raw_content_uri")
+  extractedContent     String?  @map("extracted_content")
+  extractedContentHash String?  @map("extracted_content_hash")
+  processingStatus     String   @map("processing_status")
+  errorMessage         String?  @map("error_message")
+  isActive             Boolean  @map("is_active")
+  createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@unique([documentId, versionNumber])
+  @@map("document_versions")
+}
+
+model Chunk {
+  id                String   @id @db.Uuid
+  documentVersionId String   @map("document_version_id") @db.Uuid
+  kbId              String   @map("kb_id") @db.Uuid
+  sequenceNumber    Int      @map("sequence_number")
+  content           String
+  contentHash       String   @map("content_hash")
+  metadata          Json     @default("{}")
+  chunkingStrategy  String   @map("chunking_strategy")
+  embeddingId       String?  @map("embedding_id") @db.Uuid
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@unique([documentVersionId, sequenceNumber])
+  @@map("chunks")
+}

@@ -1,0 +1,1 @@
+-- no-op: error_message was present in the initial schema (001); dropping it here breaks the application
