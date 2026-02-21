@@ -8,7 +8,11 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 
+	"ragtime-backend/internal/logger"
 	"ragtime-backend/internal/retrieval"
 	retrievalservice "ragtime-backend/internal/retrieval/service"
 )
@@ -16,15 +20,44 @@ import (
 // Handler handles retrieval requests.
 type Handler struct {
 	service *retrievalservice.Service
+	metrics *retrievalMetrics
+}
+
+type retrievalMetrics struct {
+	requests    metric.Int64Counter
+	latencyMS   metric.Float64Histogram
+	resultCount metric.Int64Histogram
 }
 
 func NewHandler(service *retrievalservice.Service) *Handler {
-	return &Handler{service: service}
+	h := &Handler{service: service}
+	h.metrics = newRetrievalMetrics()
+	return h
 }
 
 func (h *Handler) Retrieve(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	statusCode := http.StatusOK
+	outcome := "success"
+	resultCount := int64(0)
+	defer func() {
+		if h.metrics == nil {
+			return
+		}
+		attrs := metric.WithAttributes(
+			attribute.String("http.route", "/v1/kb/{kbID}/retrieve"),
+			attribute.Int("http.status_code", statusCode),
+			attribute.String("retrieval.outcome", outcome),
+		)
+		h.metrics.requests.Add(r.Context(), 1, attrs)
+		h.metrics.latencyMS.Record(r.Context(), float64(time.Since(start).Milliseconds()), attrs)
+		h.metrics.resultCount.Record(r.Context(), resultCount, attrs)
+	}()
+
 	kbID := strings.TrimSpace(chi.URLParam(r, "kbID"))
 	if kbID == "" {
+		statusCode = http.StatusBadRequest
+		outcome = "client_error"
 		writeError(w, http.StatusBadRequest, "kbID is required")
 		return
 	}
@@ -33,12 +66,16 @@ func (h *Handler) Retrieve(w http.ResponseWriter, r *http.Request) {
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&payload); err != nil {
+		statusCode = http.StatusBadRequest
+		outcome = "client_error"
 		writeError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
 
 	req, err := buildRetrievalRequest(kbID, payload)
 	if err != nil {
+		statusCode = http.StatusBadRequest
+		outcome = "client_error"
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -46,14 +83,60 @@ func (h *Handler) Retrieve(w http.ResponseWriter, r *http.Request) {
 	res, err := h.service.Retrieve(r.Context(), req)
 	if err != nil {
 		if isRetrievalClientError(err) {
+			statusCode = http.StatusBadRequest
+			outcome = "client_error"
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		statusCode = http.StatusInternalServerError
+		outcome = "server_error"
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
+	statusCode = http.StatusOK
+	resultCount = int64(res.ResultCount)
 	writeJSON(w, http.StatusOK, res)
+}
+
+func newRetrievalMetrics() *retrievalMetrics {
+	meter := otel.Meter("ragtime-backend/retrieval/http")
+
+	requests, err := meter.Int64Counter(
+		"ragtime.retrieval.requests",
+		metric.WithDescription("Total retrieval HTTP requests."),
+		metric.WithUnit("{request}"),
+	)
+	if err != nil {
+		logger.Warn("failed to initialize retrieval requests metric", "error", err)
+		return nil
+	}
+
+	latencyMS, err := meter.Float64Histogram(
+		"ragtime.retrieval.latency",
+		metric.WithDescription("Retrieval HTTP latency in milliseconds."),
+		metric.WithUnit("ms"),
+	)
+	if err != nil {
+		logger.Warn("failed to initialize retrieval latency metric", "error", err)
+		return nil
+	}
+
+	resultCount, err := meter.Int64Histogram(
+		"ragtime.retrieval.result_count",
+		metric.WithDescription("Number of results returned by retrieval requests."),
+		metric.WithUnit("{result}"),
+	)
+	if err != nil {
+		logger.Warn("failed to initialize retrieval result_count metric", "error", err)
+		return nil
+	}
+
+	return &retrievalMetrics{
+		requests:    requests,
+		latencyMS:   latencyMS,
+		resultCount: resultCount,
+	}
 }
 
 type request struct {

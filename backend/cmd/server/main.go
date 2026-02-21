@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -26,6 +27,7 @@ import (
 	retrievalrepo "ragtime-backend/internal/retrieval/repository"
 	retrievalservice "ragtime-backend/internal/retrieval/service"
 	"ragtime-backend/internal/storage"
+	"ragtime-backend/internal/telemetry"
 )
 
 func main() {
@@ -37,6 +39,19 @@ func main() {
 	db, err := storage.OpenDB(dsn)
 	if err != nil {
 		logger.Fatal("Database connection failed", "error", err)
+	}
+
+	metricsShutdown, err := telemetry.InitMetrics(context.Background())
+	if err != nil {
+		logger.Warn("OpenTelemetry metrics disabled", "error", err)
+	} else {
+		defer func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if shutdownErr := metricsShutdown(ctx); shutdownErr != nil {
+				logger.Error("failed to shutdown OpenTelemetry metrics", "error", shutdownErr)
+			}
+		}()
 	}
 
 	store := mustObjectStoreClient()
