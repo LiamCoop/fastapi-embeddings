@@ -22,13 +22,9 @@ function toInputJson(value: Record<string, unknown>): Prisma.InputJsonValue {
   return value as Prisma.InputJsonValue;
 }
 
-function normalizeDate(value: Date | string): Date {
-  return value instanceof Date ? value : new Date(value);
-}
-
 export class PrismaKnowledgeDal implements KnowledgeDal {
   async ping(): Promise<void> {
-    await prisma.$queryRaw`SELECT 1`;
+    await prisma.organization.count();
   }
 
   async getOrganizationBySlug(slug: string): Promise<OrgRecord | null> {
@@ -46,24 +42,28 @@ export class PrismaKnowledgeDal implements KnowledgeDal {
   }
 
   async listKnowledgeBasesForOrg(orgId: string, orgSlug: string): Promise<KnowledgeBaseRecord[]> {
-    const rows = await prisma.$queryRaw<Array<KnowledgeBaseRecord>>`
-      SELECT
-        id,
-        name,
-        metadata,
-        created_at AS "createdAt",
-        updated_at AS "updatedAt"
-      FROM knowledge_bases
-      WHERE metadata ->> 'organization_id' = ${orgId}
-         OR metadata ->> 'org_slug' = ${orgSlug}
-      ORDER BY updated_at DESC
-    `;
+    const rows = await prisma.knowledgeBase.findMany({
+      where: {
+        OR: [
+          { metadata: { path: ["organization_id"], equals: orgId } },
+          { metadata: { path: ["org_slug"], equals: orgSlug } },
+        ],
+      },
+      orderBy: { updatedAt: "desc" },
+      select: {
+        id: true,
+        name: true,
+        metadata: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
 
     return rows.map((row) => ({
       ...row,
       metadata: asRecord(row.metadata),
-      createdAt: normalizeDate(row.createdAt),
-      updatedAt: normalizeDate(row.updatedAt),
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
     }));
   }
 
@@ -214,100 +214,154 @@ export class PrismaKnowledgeDal implements KnowledgeDal {
       return [];
     }
 
-    const values = Prisma.join(documentIds);
-    const rows = await prisma.$queryRaw<Array<{ document_id: string; processing_status: string; version_number: number }>>`
-      SELECT DISTINCT ON (dv.document_id)
-        dv.document_id,
-        dv.processing_status,
-        dv.version_number
-      FROM document_versions dv
-      WHERE dv.document_id IN (${values})
-      ORDER BY dv.document_id ASC, dv.version_number DESC
-    `;
+    const rows = await prisma.documentVersion.findMany({
+      where: { documentId: { in: documentIds } },
+      orderBy: [{ documentId: "asc" }, { versionNumber: "desc" }],
+      distinct: ["documentId"],
+      select: {
+        documentId: true,
+        processingStatus: true,
+        versionNumber: true,
+      },
+    });
 
     return rows.map((row) => ({
-      documentId: row.document_id,
-      processingStatus: row.processing_status,
-      versionNumber: Number(row.version_number),
+      documentId: row.documentId,
+      processingStatus: row.processingStatus,
+      versionNumber: row.versionNumber,
     }));
   }
 
   async listActiveChunksForKb(kbId: string): Promise<RawChunkRow[]> {
-    const rows = await prisma.$queryRaw<Array<Omit<RawChunkRow, "created_at"> & { created_at: Date | string }>>`
-      SELECT
-        c.id AS id,
-        dv.document_id AS document_id,
-        c.document_version_id AS document_version_id,
-        c.sequence_number AS sequence_number,
-        c.content AS content,
-        c.content_hash AS content_hash,
-        c.metadata AS metadata,
-        c.chunking_strategy AS chunking_strategy,
-        c.embedding_id AS embedding_id,
-        c.created_at AS created_at
-      FROM chunks c
-      INNER JOIN document_versions dv ON dv.id = c.document_version_id
-      INNER JOIN documents d ON d.id = dv.document_id
-      WHERE c.kb_id = ${kbId}
-        AND dv.is_active = TRUE
-        AND d.kb_id = ${kbId}
-      ORDER BY dv.document_id ASC, c.sequence_number ASC, c.created_at ASC
-    `;
+    const activeVersions = await prisma.documentVersion.findMany({
+      where: { kbId, isActive: true },
+      select: { id: true, documentId: true },
+    });
+    if (activeVersions.length === 0) {
+      return [];
+    }
 
-    return rows.map((row) => ({
-      ...row,
-      created_at: normalizeDate(row.created_at),
-    }));
+    const documentIdByVersionId = new Map(activeVersions.map((version) => [version.id, version.documentId]));
+    const chunks = await prisma.chunk.findMany({
+      where: {
+        kbId,
+        documentVersionId: { in: activeVersions.map((version) => version.id) },
+      },
+      orderBy: [{ sequenceNumber: "asc" }, { createdAt: "asc" }],
+      select: {
+        id: true,
+        documentVersionId: true,
+        sequenceNumber: true,
+        content: true,
+        contentHash: true,
+        metadata: true,
+        chunkingStrategy: true,
+        embeddingId: true,
+        createdAt: true,
+      },
+    });
+
+    return chunks
+      .map((chunk) => ({
+        id: chunk.id,
+        document_id: documentIdByVersionId.get(chunk.documentVersionId) ?? "",
+        document_version_id: chunk.documentVersionId,
+        sequence_number: chunk.sequenceNumber,
+        content: chunk.content,
+        content_hash: chunk.contentHash,
+        metadata: asRecord(chunk.metadata),
+        chunking_strategy: chunk.chunkingStrategy,
+        embedding_id: chunk.embeddingId,
+        created_at: chunk.createdAt,
+      }))
+      .filter((chunk) => chunk.document_id !== "")
+      .sort((a, b) => {
+        if (a.document_id < b.document_id) return -1;
+        if (a.document_id > b.document_id) return 1;
+        if (a.sequence_number !== b.sequence_number) return a.sequence_number - b.sequence_number;
+        return a.created_at.getTime() - b.created_at.getTime();
+      });
   }
 
   async listChunkCountsForKb(kbId: string): Promise<ChunkCountRow[]> {
-    const rows = await prisma.$queryRaw<Array<{ document_id: string; chunk_count: number | string }>>`
-      SELECT
-        d.id AS document_id,
-        COUNT(c.id)::int AS chunk_count
-      FROM documents d
-      LEFT JOIN document_versions dv
-        ON dv.document_id = d.id
-       AND dv.is_active = TRUE
-      LEFT JOIN chunks c
-        ON c.document_version_id = dv.id
-       AND c.kb_id = ${kbId}
-      WHERE d.kb_id = ${kbId}
-      GROUP BY d.id
-    `;
+    const documents = await prisma.document.findMany({
+      where: { kbId },
+      select: { id: true },
+    });
 
-    return rows.map((row) => ({
-      document_id: row.document_id,
-      chunk_count: Number(row.chunk_count),
+    const activeVersions = await prisma.documentVersion.findMany({
+      where: { kbId, isActive: true },
+      select: { id: true, documentId: true },
+    });
+
+    if (activeVersions.length === 0) {
+      return documents.map((document) => ({ document_id: document.id, chunk_count: 0 }));
+    }
+
+    const versionToDocument = new Map(activeVersions.map((version) => [version.id, version.documentId]));
+    const grouped = await prisma.chunk.groupBy({
+      by: ["documentVersionId"],
+      where: {
+        kbId,
+        documentVersionId: { in: activeVersions.map((version) => version.id) },
+      },
+      _count: { _all: true },
+    });
+
+    const countsByDocument = new Map<string, number>();
+    for (const row of grouped) {
+      const documentId = versionToDocument.get(row.documentVersionId);
+      if (!documentId) {
+        continue;
+      }
+      countsByDocument.set(documentId, (countsByDocument.get(documentId) ?? 0) + row._count._all);
+    }
+
+    return documents.map((document) => ({
+      document_id: document.id,
+      chunk_count: countsByDocument.get(document.id) ?? 0,
     }));
   }
 
   async listActiveChunksForDocument(kbId: string, documentId: string): Promise<RawChunkRow[]> {
-    const rows = await prisma.$queryRaw<Array<Omit<RawChunkRow, "created_at"> & { created_at: Date | string }>>`
-      SELECT
-        c.id AS id,
-        dv.document_id AS document_id,
-        c.document_version_id AS document_version_id,
-        c.sequence_number AS sequence_number,
-        c.content AS content,
-        c.content_hash AS content_hash,
-        c.metadata AS metadata,
-        c.chunking_strategy AS chunking_strategy,
-        c.embedding_id AS embedding_id,
-        c.created_at AS created_at
-      FROM chunks c
-      INNER JOIN document_versions dv ON dv.id = c.document_version_id
-      INNER JOIN documents d ON d.id = dv.document_id
-      WHERE c.kb_id = ${kbId}
-        AND d.kb_id = ${kbId}
-        AND dv.is_active = TRUE
-        AND dv.document_id = ${documentId}
-      ORDER BY c.sequence_number ASC, c.created_at ASC
-    `;
+    const activeVersions = await prisma.documentVersion.findMany({
+      where: { kbId, documentId, isActive: true },
+      select: { id: true },
+    });
+    if (activeVersions.length === 0) {
+      return [];
+    }
+
+    const rows = await prisma.chunk.findMany({
+      where: {
+        kbId,
+        documentVersionId: { in: activeVersions.map((version) => version.id) },
+      },
+      orderBy: [{ sequenceNumber: "asc" }, { createdAt: "asc" }],
+      select: {
+        id: true,
+        documentVersionId: true,
+        sequenceNumber: true,
+        content: true,
+        contentHash: true,
+        metadata: true,
+        chunkingStrategy: true,
+        embeddingId: true,
+        createdAt: true,
+      },
+    });
 
     return rows.map((row) => ({
-      ...row,
-      created_at: normalizeDate(row.created_at),
+      id: row.id,
+      document_id: documentId,
+      document_version_id: row.documentVersionId,
+      sequence_number: row.sequenceNumber,
+      content: row.content,
+      content_hash: row.contentHash,
+      metadata: asRecord(row.metadata),
+      chunking_strategy: row.chunkingStrategy,
+      embedding_id: row.embeddingId,
+      created_at: row.createdAt,
     }));
   }
 }

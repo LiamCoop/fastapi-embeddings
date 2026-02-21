@@ -1,5 +1,8 @@
 export function apiBaseUrl() {
-  const root = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080";
+  const isServer = typeof window === "undefined";
+  const root = isServer
+    ? (process.env.API_INTERNAL_URL ?? process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080")
+    : (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080");
   const version = process.env.NEXT_PUBLIC_API_VERSION ?? "v1";
   return `${root.replace(/\/$/, "")}/${version}`;
 }

@@ -11,3 +11,5 @@ backend/.gocache
 backend/.gomodcache
 backend/.env.docker
 frontend/.env.docker
+backend/tmp
+backend/build-errors.log
