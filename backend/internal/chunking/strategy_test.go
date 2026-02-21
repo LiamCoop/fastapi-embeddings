@@ -32,3 +32,13 @@ func TestNewChunker_RecursiveDefaults(t *testing.T) {
 		t.Fatalf("expected default separators")
 	}
 }
+
+func TestNewChunker_Markdown(t *testing.T) {
+	chunker, err := NewChunker(Options{Strategy: StrategyMarkdown})
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if chunker == nil {
+		t.Fatalf("expected chunker instance")
+	}
+}

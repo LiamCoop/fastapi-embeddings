@@ -7,11 +7,14 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
 	"ragtime-backend/internal/chunking"
+	mdchunking "ragtime-backend/internal/chunking/markdown"
 	"ragtime-backend/internal/document"
 	"ragtime-backend/internal/domain"
 	"ragtime-backend/internal/embedding"
@@ -23,6 +26,7 @@ const (
 	defaultChunkMaxRunes = 2000
 	defaultChunkOverlap  = 200
 	defaultChunkingName  = "fixed_size"
+	markdownChunkingName = "markdown"
 )
 
 type Service struct {
@@ -165,14 +169,26 @@ func (s *Service) processContent(
 		return err
 	}
 
-	chunks, err := s.chunker.Chunk(content)
+	chunker, err := s.chunkerForDoc(doc)
 	if err != nil {
 		return err
 	}
+	chunks, err := chunker.Chunk(content)
+	if err != nil {
+		return err
+	}
+	chunkingStrategy := s.chunkingStrategyForDoc(doc)
 
 	chunkRecords := make([]ChunkRecord, 0, len(chunks))
 	for _, chunk := range chunks {
 		hash := sha256.Sum256([]byte(chunk.Content))
+		meta := map[string]any{
+			"start_rune": chunk.StartRune,
+			"end_rune":   chunk.EndRune,
+		}
+		for k, v := range chunk.Metadata {
+			meta[k] = v
+		}
 		chunkRecords = append(chunkRecords, ChunkRecord{
 			ID:                uuid.NewString(),
 			DocumentVersionID: uploadResult.DocumentVersionID,
@@ -180,12 +196,9 @@ func (s *Service) processContent(
 			SequenceNumber:    chunk.Index,
 			Content:           chunk.Content,
 			ContentHash:       hex.EncodeToString(hash[:]),
-			Metadata: map[string]any{
-				"start_rune": chunk.StartRune,
-				"end_rune":   chunk.EndRune,
-			},
-			ChunkingStrategy: defaultChunkingName,
-			CreatedAt:        s.now(),
+			Metadata:          meta,
+			ChunkingStrategy:  chunkingStrategy,
+			CreatedAt:         s.now(),
 		})
 	}
 
@@ -233,4 +246,32 @@ func (s *Service) completeJob(ctx context.Context, jobID string, status JobStatu
 	if err := s.repo.UpdateIngestionJob(ctx, jobID, status, errMsg, &completed); err != nil {
 		logger.Error("update ingestion job failed", "job_id", jobID, "error", err)
 	}
+}
+
+func (s *Service) chunkerForDoc(doc IngestDocumentRequest) (chunking.Chunker, error) {
+	if !isMarkdownDoc(doc) {
+		return s.chunker, nil
+	}
+	opts := mdchunking.DefaultMarkdownOptions()
+	opts.MDX = isMDXPath(doc.Path)
+	return chunking.NewMarkdownChunker(opts)
+}
+
+func (s *Service) chunkingStrategyForDoc(doc IngestDocumentRequest) string {
+	if isMarkdownDoc(doc) {
+		return markdownChunkingName
+	}
+	return defaultChunkingName
+}
+
+func isMarkdownDoc(doc IngestDocumentRequest) bool {
+	if doc.DocumentType != nil && strings.EqualFold(*doc.DocumentType, document.DocTypeMarkdown) {
+		return true
+	}
+	ext := strings.ToLower(filepath.Ext(doc.Path))
+	return ext == ".md" || ext == ".mdx"
+}
+
+func isMDXPath(path string) bool {
+	return strings.EqualFold(filepath.Ext(path), ".mdx")
 }

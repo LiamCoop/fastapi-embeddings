@@ -1,6 +1,10 @@
 package chunking
 
-import "strings"
+import (
+	"strings"
+
+	mdchunking "ragtime-backend/internal/chunking/markdown"
+)
 
 // Strategy identifies a chunking approach.
 type Strategy string
@@ -8,6 +12,7 @@ type Strategy string
 const (
 	StrategyFixed     Strategy = "fixed"
 	StrategyRecursive Strategy = "recursive"
+	StrategyMarkdown  Strategy = "markdown"
 )
 
 // Language captures language-specific separator presets.
@@ -46,6 +51,8 @@ func NewChunker(opts Options) (Chunker, error) {
 			OverlapRunes: opts.OverlapRunes,
 			Separators:   seps,
 		}, nil
+	case StrategyMarkdown:
+		return NewMarkdownChunker(mdchunking.DefaultMarkdownOptions())
 	default:
 		return nil, ErrUnknownStrategy
 	}

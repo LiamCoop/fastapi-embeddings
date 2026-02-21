@@ -15,6 +15,7 @@ type Chunk struct {
 	EndRune    int
 	Content    string
 	RuneLength int
+	Metadata   map[string]any
 }
 
 // Chunker abstracts chunking strategies for easy swapping later.
