@@ -40,4 +40,12 @@ func (c *NoopLayer) GetChunksWithDocuments(ctx context.Context, chunkIDs []strin
 	return c.store.GetChunksWithDocuments(ctx, chunkIDs)
 }
 
+func (c *NoopLayer) GetChunksWithDocumentsForKB(ctx context.Context, knowledgeBaseID string, chunkIDs []string) ([]retrieval.ChunkRecord, error) {
+	return c.store.GetChunksWithDocumentsForKB(ctx, knowledgeBaseID, chunkIDs)
+}
+
+func (c *NoopLayer) GetChunksByDocumentVersionRange(ctx context.Context, documentVersionID string, startSeq int32, endSeq int32) ([]retrieval.ChunkRecord, error) {
+	return c.store.GetChunksByDocumentVersionRange(ctx, documentVersionID, startSeq, endSeq)
+}
+
 var _ Layer = (*NoopLayer)(nil)

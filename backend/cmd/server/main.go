@@ -62,6 +62,8 @@ func main() {
 	retrievalHandler := retrievalhttp.NewHandler(services.retrieval)
 	router.Post("/v1/kb/{kbID}/documents/{documentID}/chunking", chunkingHandler.InitiateDocumentChunking)
 	router.Post("/v1/kb/{kbID}/chunks/{chunkID}/embed", chunkingHandler.EmbedChunkByID)
+	router.Post("/v1/kb/{kbID}/query", retrievalHandler.Query)
+	router.Post("/v1/kb/{kbID}/hydrate", retrievalHandler.Hydrate)
 	router.Post("/v1/kb/{kbID}/retrieve", retrievalHandler.Retrieve)
 	go services.chunking.Run(context.Background())
 

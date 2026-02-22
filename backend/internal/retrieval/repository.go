@@ -12,6 +12,8 @@ type Repository interface {
 	SearchSemantic(ctx context.Context, params SearchParams) ([]ScoredChunk, error)
 	SearchLexical(ctx context.Context, params SearchParams) ([]ScoredChunk, error)
 	GetChunksWithDocuments(ctx context.Context, chunkIDs []string) ([]ChunkRecord, error)
+	GetChunksWithDocumentsForKB(ctx context.Context, knowledgeBaseID string, chunkIDs []string) ([]ChunkRecord, error)
+	GetChunksByDocumentVersionRange(ctx context.Context, documentVersionID string, startSeq int32, endSeq int32) ([]ChunkRecord, error)
 }
 
 type RetrievalRequestRecord struct {

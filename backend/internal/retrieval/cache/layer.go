@@ -15,6 +15,8 @@ type Layer interface {
 	SearchSemantic(ctx context.Context, params retrieval.SearchParams) ([]retrieval.ScoredChunk, error)
 	SearchLexical(ctx context.Context, params retrieval.SearchParams) ([]retrieval.ScoredChunk, error)
 	GetChunksWithDocuments(ctx context.Context, chunkIDs []string) ([]retrieval.ChunkRecord, error)
+	GetChunksWithDocumentsForKB(ctx context.Context, knowledgeBaseID string, chunkIDs []string) ([]retrieval.ChunkRecord, error)
+	GetChunksByDocumentVersionRange(ctx context.Context, documentVersionID string, startSeq int32, endSeq int32) ([]retrieval.ChunkRecord, error)
 }
 
 var _ Layer = (repository.Store)(nil)

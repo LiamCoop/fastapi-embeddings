@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 	"github.com/pgvector/pgvector-go"
 
 	"ragtime-backend/internal/retrieval"
@@ -243,24 +244,108 @@ func (r *PostgresStore) GetChunksWithDocuments(ctx context.Context, chunkIDs []s
 		return nil, err
 	}
 
-	results := make([]retrieval.ChunkRecord, 0, len(rows))
-	for _, row := range rows {
-		results = append(results, retrieval.ChunkRecord{
-			ChunkID:           row.ChunkID.String(),
-			DocumentID:        row.DocumentID.String(),
-			DocumentVersionID: row.DocumentVersionID.String(),
-			DocumentPath:      row.DocumentPath,
-			DocumentTitle:     nullStringPtr(row.DocumentTitle),
-			DocumentType:      row.DocumentType,
-			Content:           row.Content,
-			Metadata:          decodeJSON(row.Metadata),
-			VersionNumber:     row.VersionNumber,
-			SequenceNumber:    row.SequenceNumber,
-			SourceMetadata:    decodeJSON(row.SourceMetadata),
-		})
+	return chunkRecordsFromRows(rows), nil
+}
+
+func (r *PostgresStore) GetChunksWithDocumentsForKB(ctx context.Context, knowledgeBaseID string, chunkIDs []string) ([]retrieval.ChunkRecord, error) {
+	if len(chunkIDs) == 0 {
+		return nil, nil
+	}
+	kbID, err := uuid.Parse(knowledgeBaseID)
+	if err != nil {
+		return nil, err
 	}
 
-	return results, nil
+	ids := make([]uuid.UUID, 0, len(chunkIDs))
+	for _, id := range chunkIDs {
+		parsed, parseErr := uuid.Parse(id)
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		ids = append(ids, parsed)
+	}
+
+	const query = `
+SELECT
+    c.id AS chunk_id,
+    c.document_version_id,
+    c.sequence_number,
+    c.content,
+    c.metadata,
+    d.id AS document_id,
+    d.path AS document_path,
+    d.title AS document_title,
+    d.document_type AS document_type,
+    d.source_metadata AS source_metadata,
+    dv.version_number,
+    dv.created_at AS version_created_at
+FROM chunks c
+JOIN document_versions dv ON c.document_version_id = dv.id
+JOIN documents d ON dv.document_id = d.id
+WHERE c.kb_id = $1
+  AND c.id = ANY($2::uuid[])`
+
+	rows, err := r.db.QueryContext(ctx, query, kbID, pq.Array(ids))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	results := make([]retrieval.ChunkRecord, 0, len(ids))
+	for rows.Next() {
+		record, scanErr := scanChunkRecord(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		results = append(results, record)
+	}
+
+	return results, rows.Err()
+}
+
+func (r *PostgresStore) GetChunksByDocumentVersionRange(ctx context.Context, documentVersionID string, startSeq int32, endSeq int32) ([]retrieval.ChunkRecord, error) {
+	versionID, err := uuid.Parse(documentVersionID)
+	if err != nil {
+		return nil, err
+	}
+
+	const query = `
+SELECT
+    c.id AS chunk_id,
+    c.document_version_id,
+    c.sequence_number,
+    c.content,
+    c.metadata,
+    d.id AS document_id,
+    d.path AS document_path,
+    d.title AS document_title,
+    d.document_type AS document_type,
+    d.source_metadata AS source_metadata,
+    dv.version_number,
+    dv.created_at AS version_created_at
+FROM chunks c
+JOIN document_versions dv ON c.document_version_id = dv.id
+JOIN documents d ON dv.document_id = d.id
+WHERE c.document_version_id = $1
+  AND c.sequence_number BETWEEN $2 AND $3
+ORDER BY c.sequence_number ASC`
+
+	rows, err := r.db.QueryContext(ctx, query, versionID, startSeq, endSeq)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	results := make([]retrieval.ChunkRecord, 0)
+	for rows.Next() {
+		record, scanErr := scanChunkRecord(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		results = append(results, record)
+	}
+
+	return results, rows.Err()
 }
 
 func toNullString(value *string) sql.NullString {
@@ -315,6 +400,77 @@ func nullStringPtr(value sql.NullString) *string {
 		return nil
 	}
 	return &value.String
+}
+
+func chunkRecordsFromRows(rows []sqlc.GetChunksWithDocumentsRow) []retrieval.ChunkRecord {
+	results := make([]retrieval.ChunkRecord, 0, len(rows))
+	for _, row := range rows {
+		results = append(results, retrieval.ChunkRecord{
+			ChunkID:           row.ChunkID.String(),
+			DocumentID:        row.DocumentID.String(),
+			DocumentVersionID: row.DocumentVersionID.String(),
+			DocumentPath:      row.DocumentPath,
+			DocumentTitle:     nullStringPtr(row.DocumentTitle),
+			DocumentType:      row.DocumentType,
+			Content:           row.Content,
+			Metadata:          decodeJSON(row.Metadata),
+			VersionNumber:     row.VersionNumber,
+			SequenceNumber:    row.SequenceNumber,
+			SourceMetadata:    decodeJSON(row.SourceMetadata),
+		})
+	}
+	return results
+}
+
+func scanChunkRecord(scanner interface {
+	Scan(dest ...any) error
+}) (retrieval.ChunkRecord, error) {
+	var (
+		chunkID           uuid.UUID
+		documentVersionID uuid.UUID
+		sequenceNumber    int32
+		content           string
+		metadataRaw       json.RawMessage
+		documentID        uuid.UUID
+		documentPath      string
+		documentTitle     sql.NullString
+		documentType      string
+		sourceMetadataRaw json.RawMessage
+		versionNumber     int32
+		versionCreatedAt  time.Time
+	)
+
+	if err := scanner.Scan(
+		&chunkID,
+		&documentVersionID,
+		&sequenceNumber,
+		&content,
+		&metadataRaw,
+		&documentID,
+		&documentPath,
+		&documentTitle,
+		&documentType,
+		&sourceMetadataRaw,
+		&versionNumber,
+		&versionCreatedAt,
+	); err != nil {
+		return retrieval.ChunkRecord{}, err
+	}
+
+	_ = versionCreatedAt
+	return retrieval.ChunkRecord{
+		ChunkID:           chunkID.String(),
+		DocumentID:        documentID.String(),
+		DocumentVersionID: documentVersionID.String(),
+		DocumentPath:      documentPath,
+		DocumentTitle:     nullStringPtr(documentTitle),
+		DocumentType:      documentType,
+		Content:           content,
+		Metadata:          decodeJSON(metadataRaw),
+		VersionNumber:     versionNumber,
+		SequenceNumber:    sequenceNumber,
+		SourceMetadata:    decodeJSON(sourceMetadataRaw),
+	}, nil
 }
 
 var _ Store = (*PostgresStore)(nil)

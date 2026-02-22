@@ -71,10 +71,12 @@ export type KnowledgeChunkEmbedResponse = {
 };
 
 export type KnowledgeRetrievalRequestFilters = {
+  project_id?: string;
   path_prefix?: string;
   document_type?: string;
   source?: string;
   tags?: string[];
+  updated_after?: string;
   created_after?: string;
   created_before?: string;
 };
@@ -82,7 +84,10 @@ export type KnowledgeRetrievalRequestFilters = {
 export type KnowledgeRetrievalRequest = {
   query: string;
   top_k?: number;
+  retrieval_profile?: "auto" | "exact" | "balanced" | "semantic";
+  semantic_weight?: number;
   hybrid_weight?: number;
+  debug?: boolean;
   filters?: KnowledgeRetrievalRequestFilters;
 };
 
@@ -119,6 +124,8 @@ export type KnowledgeRetrievalResult = {
 
 export type KnowledgeRetrievalResponse = {
   request_id: string;
+  query_id?: string;
+  index_version?: string;
   kb_id: string;
   query: string;
   top_k: number;
@@ -126,6 +133,28 @@ export type KnowledgeRetrievalResponse = {
   result_count: number;
   latency_ms: number;
   results: KnowledgeRetrievalResult[];
+  passages?: KnowledgeRetrievalResult[];
+  debug?: {
+    retrieval_profile_effective: string;
+    semantic_weight_effective: number;
+    auto_signals_detected?: string[];
+    lexical_candidates: number;
+    semantic_candidates: number;
+    reranker_applied: boolean;
+    filters_applied?: Record<string, unknown>;
+  };
+};
+
+export type KnowledgeHydrateRequest = {
+  chunk_ids: string[];
+  adjacent_before?: number;
+  adjacent_after?: number;
+};
+
+export type KnowledgeHydrateResponse = {
+  kb_id: string;
+  chunk_count: number;
+  chunks: KnowledgeRetrievalResult[];
 };
 
 async function fetchJson<T>(input: string, init?: RequestInit): Promise<T> {
@@ -192,6 +221,10 @@ export function knowledgeChunkEmbedApiPath(slug: string, kbId: string, chunkId: 
 
 export function knowledgeRetrieveApiPath(slug: string, kbId: string): string {
   return `/api/org/${slug}/knowledge/${kbId}/retrieve`;
+}
+
+export function knowledgeHydrateApiPath(slug: string, kbId: string): string {
+  return `/api/org/${slug}/knowledge/${kbId}/hydrate`;
 }
 
 export async function fetchOrgKnowledgeBases(
@@ -265,6 +298,21 @@ export async function retrieveOrgKnowledge(
   const path = knowledgeRetrieveApiPath(slug, kbId);
   const url = options?.baseUrl ? `${options.baseUrl}${path}` : path;
   return fetchJson<KnowledgeRetrievalResponse>(url, {
+    method: "POST",
+    body: JSON.stringify(payload),
+    ...(options?.init ?? {}),
+  });
+}
+
+export async function hydrateOrgKnowledge(
+  slug: string,
+  kbId: string,
+  payload: KnowledgeHydrateRequest,
+  options?: { baseUrl?: string; init?: RequestInit },
+): Promise<KnowledgeHydrateResponse> {
+  const path = knowledgeHydrateApiPath(slug, kbId);
+  const url = options?.baseUrl ? `${options.baseUrl}${path}` : path;
+  return fetchJson<KnowledgeHydrateResponse>(url, {
     method: "POST",
     body: JSON.stringify(payload),
     ...(options?.init ?? {}),

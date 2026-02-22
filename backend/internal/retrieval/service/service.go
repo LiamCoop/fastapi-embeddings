@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -17,6 +19,13 @@ import (
 const (
 	defaultCandidateFloor = 50
 	defaultCandidateCap   = 200
+)
+
+var (
+	quotedPhrasePattern = regexp.MustCompile(`"[^"]+"|'[^']+'`)
+	symbolPattern       = regexp.MustCompile(`[/._]|::|->`)
+	camelSnakePattern   = regexp.MustCompile(`[a-z]+[A-Z][a-zA-Z0-9]*|[a-zA-Z]+_[a-zA-Z0-9_]+`)
+	errorCodePattern    = regexp.MustCompile(`\b(?:[A-Z]{2,}[_-]?\d+|\d+\.\d+\.\d+|v\d+(?:\.\d+)*)\b`)
 )
 
 // Service orchestrates query embedding, hybrid search, and retrieval observability records.
@@ -50,6 +59,10 @@ func (s *Service) Retrieve(ctx context.Context, req retrieval.Request) (*retriev
 	if err := retrieval.ValidateRequest(req); err != nil {
 		return nil, err
 	}
+
+	profileEffective, semanticWeight, autoSignals := resolveProfileAndWeight(req)
+	// Maintain legacy field semantics while adding explicit semantic weight controls.
+	req.HybridWeight = semanticWeight
 
 	start := s.now()
 	requestID := uuid.NewString()
@@ -105,7 +118,7 @@ func (s *Service) Retrieve(ctx context.Context, req retrieval.Request) (*retriev
 	semanticScores := normalizeScores(semantic)
 	lexicalScores := normalizeScores(lexical)
 
-	merged := mergeScores(semanticScores, lexicalScores, req.HybridWeight)
+	merged := mergeScores(semanticScores, lexicalScores, semanticWeight)
 	sortResults(merged)
 
 	if len(merged) > req.TopK {
@@ -136,19 +149,8 @@ func (s *Service) Retrieve(ctx context.Context, req retrieval.Request) (*retriev
 			continue
 		}
 
-		citation := buildCitation(chunk)
-		results = append(results, retrieval.Result{
-			ChunkID:           chunk.ChunkID,
-			DocumentID:        chunk.DocumentID,
-			DocumentVersionID: chunk.DocumentVersionID,
-			DocumentPath:      chunk.DocumentPath,
-			DocumentTitle:     chunk.DocumentTitle,
-			DocumentType:      chunk.DocumentType,
-			Content:           chunk.Content,
-			Metadata:          chunk.Metadata,
-			Scores:            item.Score,
-			Citation:          citation,
-		})
+		result := buildResult(chunk, item.Score)
+		results = append(results, result)
 
 		resultRecords = append(resultRecords, retrieval.RetrievalResultRecord{
 			ID:                 uuid.NewString(),
@@ -172,15 +174,91 @@ func (s *Service) Retrieve(ctx context.Context, req retrieval.Request) (*retriev
 		return nil, err
 	}
 
-	return &retrieval.Response{
+	response := &retrieval.Response{
 		RequestID:       requestID,
+		QueryID:         requestID,
+		IndexVersion:    "active-document-versions",
 		KnowledgeBaseID: req.KnowledgeBaseID,
 		Query:           req.Query,
 		TopK:            req.TopK,
-		HybridWeight:    req.HybridWeight,
+		HybridWeight:    semanticWeight,
 		ResultCount:     len(results),
 		LatencyMS:       latency,
 		Results:         results,
+		Passages:        results,
+	}
+	if req.Debug {
+		response.Debug = &retrieval.DebugMetadata{
+			RetrievalProfileEffective: profileEffective,
+			SemanticWeightEffective:   semanticWeight,
+			AutoSignalsDetected:       autoSignals,
+			LexicalCandidates:         len(lexical),
+			SemanticCandidates:        len(semantic),
+			RerankerApplied:           false,
+			FiltersApplied:            filterPayload,
+		}
+	}
+
+	return response, nil
+}
+
+func (s *Service) Hydrate(ctx context.Context, req retrieval.HydrateRequest) (*retrieval.HydrateResponse, error) {
+	if s.cache == nil {
+		return nil, retrieval.ErrNilRepository
+	}
+	if err := retrieval.ValidateHydrateRequest(req); err != nil {
+		return nil, err
+	}
+
+	baseChunks, err := s.cache.GetChunksWithDocumentsForKB(ctx, req.KnowledgeBaseID, req.ChunkIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	chunkMap := map[string]retrieval.ChunkRecord{}
+	for _, chunk := range baseChunks {
+		chunkMap[chunk.ChunkID] = chunk
+	}
+
+	if req.AdjacentBefore > 0 || req.AdjacentAfter > 0 {
+		for _, chunk := range baseChunks {
+			start := chunk.SequenceNumber - int32(req.AdjacentBefore)
+			if start < 0 {
+				start = 0
+			}
+			end := chunk.SequenceNumber + int32(req.AdjacentAfter)
+
+			adjacent, adjacentErr := s.cache.GetChunksByDocumentVersionRange(ctx, chunk.DocumentVersionID, start, end)
+			if adjacentErr != nil {
+				return nil, adjacentErr
+			}
+
+			for _, expanded := range adjacent {
+				chunkMap[expanded.ChunkID] = expanded
+			}
+		}
+	}
+
+	chunks := make([]retrieval.ChunkRecord, 0, len(chunkMap))
+	for _, chunk := range chunkMap {
+		chunks = append(chunks, chunk)
+	}
+	sort.Slice(chunks, func(i, j int) bool {
+		if chunks[i].DocumentPath != chunks[j].DocumentPath {
+			return chunks[i].DocumentPath < chunks[j].DocumentPath
+		}
+		return chunks[i].SequenceNumber < chunks[j].SequenceNumber
+	})
+
+	results := make([]retrieval.Result, 0, len(chunks))
+	for _, chunk := range chunks {
+		results = append(results, buildResult(chunk, retrieval.Score{}))
+	}
+
+	return &retrieval.HydrateResponse{
+		KnowledgeBaseID: req.KnowledgeBaseID,
+		ChunkCount:      len(results),
+		Chunks:          results,
 	}, nil
 }
 
@@ -191,6 +269,95 @@ func applyDefaults(req *retrieval.Request, topK int, weight float64) {
 	if !req.HybridWeightSet {
 		req.HybridWeight = weight
 	}
+	if strings.TrimSpace(req.RetrievalProfile) == "" {
+		req.RetrievalProfile = retrieval.DefaultRetrievalProfile
+	}
+	if req.SemanticWeightSet {
+		req.HybridWeight = req.SemanticWeight
+		req.HybridWeightSet = true
+	}
+}
+
+func resolveProfileAndWeight(req retrieval.Request) (string, float64, []string) {
+	profile := strings.ToLower(strings.TrimSpace(req.RetrievalProfile))
+	if profile == "" {
+		profile = retrieval.RetrievalProfileAuto
+	}
+
+	if req.SemanticWeightSet {
+		return profile, req.SemanticWeight, []string{"semantic_weight_override"}
+	}
+	if req.HybridWeightSet {
+		return profile, req.HybridWeight, []string{"hybrid_weight_override"}
+	}
+
+	switch profile {
+	case retrieval.RetrievalProfileExact:
+		return profile, 0.2, nil
+	case retrieval.RetrievalProfileBalanced:
+		return profile, 0.5, nil
+	case retrieval.RetrievalProfileSemantic:
+		return profile, 0.8, nil
+	default:
+		autoProfile, signals := classifyAutoProfile(req.Query)
+		switch autoProfile {
+		case retrieval.RetrievalProfileExact:
+			return autoProfile, 0.2, signals
+		case retrieval.RetrievalProfileSemantic:
+			return autoProfile, 0.8, signals
+		default:
+			return retrieval.RetrievalProfileBalanced, 0.5, signals
+		}
+	}
+}
+
+func classifyAutoProfile(query string) (string, []string) {
+	trimmed := strings.TrimSpace(query)
+	if trimmed == "" {
+		return retrieval.RetrievalProfileBalanced, nil
+	}
+
+	tokens := strings.Fields(trimmed)
+	lower := strings.ToLower(trimmed)
+	lexicalSignals := make([]string, 0)
+	semanticSignals := make([]string, 0)
+
+	if quotedPhrasePattern.MatchString(trimmed) {
+		lexicalSignals = append(lexicalSignals, "quoted_phrase")
+	}
+	if symbolPattern.MatchString(trimmed) {
+		lexicalSignals = append(lexicalSignals, "symbols")
+	}
+	if camelSnakePattern.MatchString(trimmed) {
+		lexicalSignals = append(lexicalSignals, "identifier_tokens")
+	}
+	if errorCodePattern.MatchString(trimmed) {
+		lexicalSignals = append(lexicalSignals, "error_or_version_pattern")
+	}
+	if len(tokens) <= 4 {
+		lexicalSignals = append(lexicalSignals, "short_query")
+	}
+
+	if strings.HasPrefix(lower, "how ") || strings.HasPrefix(lower, "why ") || strings.HasPrefix(lower, "when ") || strings.HasPrefix(lower, "what ") {
+		semanticSignals = append(semanticSignals, "question_form")
+	}
+	if len(tokens) >= 9 {
+		semanticSignals = append(semanticSignals, "long_natural_language")
+	}
+	if !symbolPattern.MatchString(trimmed) && !camelSnakePattern.MatchString(trimmed) {
+		semanticSignals = append(semanticSignals, "conversational_phrasing")
+	}
+
+	if len(lexicalSignals) > len(semanticSignals) {
+		return retrieval.RetrievalProfileExact, lexicalSignals
+	}
+	if len(semanticSignals) > len(lexicalSignals) {
+		return retrieval.RetrievalProfileSemantic, semanticSignals
+	}
+
+	signals := append([]string{}, lexicalSignals...)
+	signals = append(signals, semanticSignals...)
+	return retrieval.RetrievalProfileBalanced, dedupeStrings(signals)
 }
 
 func candidateLimit(topK int) int {
@@ -322,6 +489,39 @@ func sortResults(results []mergedScore) {
 	})
 }
 
+func buildResult(chunk retrieval.ChunkRecord, score retrieval.Score) retrieval.Result {
+	citation := buildCitation(chunk)
+	offsets := &retrieval.Offsets{
+		StartRune:  citation.StartRune,
+		EndRune:    citation.EndRune,
+		RuneLength: citation.RuneLength,
+	}
+	if offsets.StartRune == nil && offsets.EndRune == nil && offsets.RuneLength == nil {
+		offsets = nil
+	}
+	sectionPath := extractStringSlice(chunk.Metadata, "section_path")
+
+	return retrieval.Result{
+		ChunkID:           chunk.ChunkID,
+		DocumentID:        chunk.DocumentID,
+		DocumentVersionID: chunk.DocumentVersionID,
+		DocumentPath:      chunk.DocumentPath,
+		DocumentTitle:     chunk.DocumentTitle,
+		DocumentType:      chunk.DocumentType,
+		Content:           chunk.Content,
+		Metadata:          chunk.Metadata,
+		Scores:            score,
+		Citation:          citation,
+		SourceURI:         chunk.DocumentPath,
+		Title:             chunk.DocumentTitle,
+		SectionPath:       sectionPath,
+		Text:              chunk.Content,
+		Score:             score.Final,
+		ScoreDetail:       score,
+		Offsets:           offsets,
+	}
+}
+
 func buildCitation(chunk retrieval.ChunkRecord) retrieval.Citation {
 	startRune := extractInt(chunk.Metadata, "start_rune")
 	endRune := extractInt(chunk.Metadata, "end_rune")
@@ -370,4 +570,53 @@ func extractInt(metadata map[string]any, key string) *int {
 	default:
 		return nil
 	}
+}
+
+func extractStringSlice(metadata map[string]any, key string) []string {
+	if metadata == nil {
+		return nil
+	}
+	raw, ok := metadata[key]
+	if !ok {
+		return nil
+	}
+
+	switch typed := raw.(type) {
+	case []string:
+		if len(typed) == 0 {
+			return nil
+		}
+		return typed
+	case []any:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			value, ok := item.(string)
+			if !ok {
+				continue
+			}
+			out = append(out, value)
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func dedupeStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
 }

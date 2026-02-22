@@ -37,7 +37,11 @@ function formatScore(value: number): string {
 export function RetrievalQueryClient({ slug, kbId }: RetrievalQueryClientProps) {
   const [query, setQuery] = useState("");
   const [topK, setTopK] = useState(5);
-  const [hybridWeight, setHybridWeight] = useState(0.7);
+  const [retrievalProfile, setRetrievalProfile] = useState<
+    "auto" | "exact" | "balanced" | "semantic"
+  >("auto");
+  const [semanticWeight, setSemanticWeight] = useState("0.7");
+  const [debug, setDebug] = useState(false);
   const [pathPrefix, setPathPrefix] = useState("");
   const [documentType, setDocumentType] = useState("");
   const [source, setSource] = useState("");
@@ -80,7 +84,18 @@ export function RetrievalQueryClient({ slug, kbId }: RetrievalQueryClientProps) 
       const payload: KnowledgeRetrievalRequest = {
         query: nextQuery,
         top_k: topK,
-        hybrid_weight: hybridWeight,
+        retrieval_profile: retrievalProfile,
+        semantic_weight: (() => {
+          if (!semanticWeight.trim()) {
+            return undefined;
+          }
+          const parsed = Number(semanticWeight);
+          if (Number.isNaN(parsed)) {
+            return undefined;
+          }
+          return Math.max(0, Math.min(1, parsed));
+        })(),
+        debug,
         filters: hasFilters ? filters : undefined,
       };
       const result = await retrieveOrgKnowledge(slug, kbId, payload, {
@@ -151,23 +166,37 @@ export function RetrievalQueryClient({ slug, kbId }: RetrievalQueryClientProps) 
           </label>
 
           <label className="rounded-lg border border-border bg-background px-3 py-2 text-xs text-muted-foreground">
-            Hybrid Weight
+            Retrieval Profile
+            <select
+              value={retrievalProfile}
+              onChange={(event) =>
+                setRetrievalProfile(event.target.value as "auto" | "exact" | "balanced" | "semantic")
+              }
+              className="mt-1 block w-full bg-transparent text-sm text-foreground outline-none"
+            >
+              <option value="auto">auto</option>
+              <option value="exact">exact</option>
+              <option value="balanced">balanced</option>
+              <option value="semantic">semantic</option>
+            </select>
+            <p className="mt-1 text-[11px] text-muted-foreground/70">
+              Auto chooses profile heuristically. Exact is lexical-heavy; semantic is dense-heavy.
+            </p>
+          </label>
+
+          <label className="rounded-lg border border-border bg-background px-3 py-2 text-xs text-muted-foreground">
+            Semantic Weight Override
             <input
               type="number"
               min={0}
               max={1}
               step={0.1}
-              value={hybridWeight}
-              onChange={(event) => {
-                const value = Number(event.target.value);
-                if (!Number.isNaN(value)) {
-                  setHybridWeight(Math.max(0, Math.min(1, value)));
-                }
-              }}
+              value={semanticWeight}
+              onChange={(event) => setSemanticWeight(event.target.value)}
               className="mt-1 block w-full bg-transparent text-sm text-foreground outline-none"
             />
             <p className="mt-1 text-[11px] text-muted-foreground/70">
-              1.0 favors semantic meaning, 0.0 favors exact keyword matches.
+              Optional override: 1.0 favors semantic meaning, 0.0 favors lexical matches.
             </p>
           </label>
 
@@ -244,6 +273,16 @@ export function RetrievalQueryClient({ slug, kbId }: RetrievalQueryClientProps) 
               Only include versions created at or before this timestamp (RFC3339).
             </p>
           </label>
+          <label className="rounded-lg border border-border bg-background px-3 py-2 text-xs text-muted-foreground md:col-span-2">
+            <span className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={debug}
+                onChange={(event) => setDebug(event.target.checked)}
+              />
+              Include debug metadata
+            </span>
+          </label>
         </div>
 
         <div className="mt-3 flex items-center gap-3">
@@ -254,6 +293,12 @@ export function RetrievalQueryClient({ slug, kbId }: RetrievalQueryClientProps) 
             <p className="text-xs text-muted-foreground">
               request_id: <span className="font-mono">{response.request_id}</span> ·{" "}
               {response.result_count} results · {response.latency_ms} ms
+              {response.debug ? (
+                <>
+                  {" "}
+                  · profile <span className="font-mono">{response.debug.retrieval_profile_effective}</span>
+                </>
+              ) : null}
             </p>
           ) : null}
         </div>
