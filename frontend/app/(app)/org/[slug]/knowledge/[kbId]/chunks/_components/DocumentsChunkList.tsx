@@ -51,7 +51,7 @@ export function DocumentsChunkList({
   return (
     <>
       {error ? <p className="mt-3 text-xs text-destructive">{error}</p> : null}
-      <div className="mt-4 divide-y divide-border rounded-lg border border-border">
+      <div className="mt-4 overflow-hidden divide-y divide-border rounded-lg border border-border">
         {documents.map((doc) => {
           const isRechunking = rechunkingDocumentId === doc.id;
           const isSelected = selectedDocumentId === doc.id;
@@ -74,14 +74,12 @@ export function DocumentsChunkList({
                 }
               }}
             >
-              <div className="flex items-center justify-between gap-3">
-                <p className="truncate text-sm font-medium text-foreground">{doc.title?.trim() || doc.path}</p>
-                <p className="font-mono text-[10px] text-muted-foreground">
+              <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3 gap-y-1">
+                <p className="min-w-0 truncate text-sm font-medium text-foreground">{doc.title?.trim() || doc.path}</p>
+                <p className="shrink-0 whitespace-nowrap font-mono text-[10px] text-muted-foreground">
                   {chunkCountsByDocumentId[doc.id] ?? 0} chunks
                 </p>
-              </div>
-              <div className="mt-1 flex items-center justify-between gap-3">
-                <div>
+                <div className="min-w-0">
                   <p className="truncate text-xs text-muted-foreground">{doc.path}</p>
                   <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.2em] text-muted-foreground/80">
                     {doc.processing_status ?? "UNKNOWN"}
@@ -91,6 +89,7 @@ export function DocumentsChunkList({
                   type="button"
                   size="sm"
                   variant="outline"
+                  className="shrink-0"
                   disabled={Boolean(rechunkingDocumentId)}
                   onClick={(event) => {
                     event.stopPropagation();

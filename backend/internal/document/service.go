@@ -156,15 +156,6 @@ func (s *Service) Upload(ctx context.Context, req UploadRequest) (*UploadResult,
 		return nil, err
 	}
 
-	if status == string(domain.StatusStored) && s.chunkingCh != nil && len(req.FileContent) > 0 {
-		s.chunkingCh <- chunkservice.DocumentRequest{
-			KnowledgeBaseID:   req.KnowledgeBaseID,
-			DocumentID:        doc.ID,
-			DocumentVersionID: version.ID,
-			Content:           string(req.FileContent),
-		}
-	}
-
 	result := &UploadResult{
 		DocumentID:        doc.ID,
 		DocumentVersionID: version.ID,

@@ -192,7 +192,7 @@ func TestUploadWithRawContentURISkipsPut(t *testing.T) {
 	}
 }
 
-func TestUploadEnqueuesChunkingRequest(t *testing.T) {
+func TestUploadDoesNotEnqueueChunkingRequest(t *testing.T) {
 	repo := newFakeRepo()
 	store := &fakeStore{uriPrefix: "file:///"}
 	ch := make(chan chunkservice.DocumentRequest, 1)
@@ -207,23 +207,14 @@ func TestUploadEnqueuesChunkingRequest(t *testing.T) {
 		ContentType:     "text/markdown",
 	}
 
-	res, err := service.Upload(context.Background(), req)
+	_, err := service.Upload(context.Background(), req)
 	if err != nil {
 		t.Fatalf("upload failed: %v", err)
 	}
 
 	select {
 	case msg := <-ch:
-		if msg.KnowledgeBaseID != req.KnowledgeBaseID {
-			t.Fatalf("expected knowledge base id %s, got %s", req.KnowledgeBaseID, msg.KnowledgeBaseID)
-		}
-		if msg.DocumentVersionID != res.DocumentVersionID {
-			t.Fatalf("expected version id %s, got %s", res.DocumentVersionID, msg.DocumentVersionID)
-		}
-		if msg.Content != string(req.FileContent) {
-			t.Fatalf("expected content to match upload payload")
-		}
+		t.Fatalf("expected no chunking request to be enqueued, got %+v", msg)
 	default:
-		t.Fatalf("expected chunking request to be enqueued")
 	}
 }
