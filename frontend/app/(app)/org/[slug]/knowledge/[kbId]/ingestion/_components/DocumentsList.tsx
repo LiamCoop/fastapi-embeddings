@@ -46,7 +46,7 @@ export function DocumentsList({ slug, kbId, documents }: DocumentsListProps) {
       <div className="mt-4 rounded-lg border border-dashed border-border py-10 text-center">
         <p className="text-sm text-muted-foreground/60">No documents ingested yet</p>
         <p className="mt-1 text-xs text-muted-foreground/40">
-          Upload stores the document version. Run manual chunking from the Chunks page via Rechunk.
+          Upload stores document versions. Run chunking from the Chunks page with Chunk all.
         </p>
       </div>
     );

@@ -1,14 +1,9 @@
 "use client";
 
-import { knowledgeDocumentChunkingApiPath, type IngestionDocument } from "@/app/lib/org-knowledge";
-import { Button } from "@/components/ui/button";
+import type { IngestionDocument } from "@/app/lib/org-knowledge";
 import { cn } from "@/lib/utils";
-import { useRouter } from "next/navigation";
-import { useState } from "react";
 
 type DocumentsChunkListProps = {
-  slug: string;
-  kbId: string;
   documents: IngestionDocument[];
   chunkCountsByDocumentId: Record<string, number>;
   selectedDocumentId: string | null;
@@ -16,44 +11,15 @@ type DocumentsChunkListProps = {
 };
 
 export function DocumentsChunkList({
-  slug,
-  kbId,
   documents,
   chunkCountsByDocumentId,
   selectedDocumentId,
   onSelectDocument,
 }: DocumentsChunkListProps) {
-  const router = useRouter();
-  const [rechunkingDocumentId, setRechunkingDocumentId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  async function handleRechunk(documentId: string) {
-    setRechunkingDocumentId(documentId);
-    setError(null);
-    try {
-      const res = await fetch(knowledgeDocumentChunkingApiPath(slug, kbId, documentId), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-      });
-      if (!res.ok) {
-        const payload = (await res.json().catch(() => null)) as { error?: string } | null;
-        throw new Error(payload?.error ?? `Rechunk request failed with status ${res.status}`);
-      }
-      router.refresh();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to rechunk document");
-    } finally {
-      setRechunkingDocumentId(null);
-    }
-  }
-
   return (
     <>
-      {error ? <p className="mt-3 text-xs text-destructive">{error}</p> : null}
       <div className="mt-4 overflow-hidden divide-y divide-border rounded-lg border border-border">
         {documents.map((doc) => {
-          const isRechunking = rechunkingDocumentId === doc.id;
           const isSelected = selectedDocumentId === doc.id;
           return (
             <div
@@ -85,20 +51,6 @@ export function DocumentsChunkList({
                     {doc.processing_status ?? "UNKNOWN"}
                   </p>
                 </div>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  className="shrink-0"
-                  disabled={Boolean(rechunkingDocumentId)}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onSelectDocument(doc.id);
-                    void handleRechunk(doc.id);
-                  }}
-                >
-                  {isRechunking ? "Rechunking..." : "Rechunk"}
-                </Button>
               </div>
             </div>
           );
