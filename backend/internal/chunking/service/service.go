@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -131,6 +132,7 @@ func (s *Service) InitiateDocumentChunking(ctx context.Context, req InitiateRequ
 		return nil, ErrDocumentNotFound
 	}
 
+	// clear out existing chunks for this document (also clears out embeddings)
 	if err := s.cache.DeleteChunksByDocument(ctx, req.KnowledgeBaseID, req.DocumentID); err != nil {
 		errMsg := fmt.Sprintf(
 			"stage=CHUNKED document_id=%s version_id=%s error=%v",
@@ -142,6 +144,7 @@ func (s *Service) InitiateDocumentChunking(ctx context.Context, req InitiateRequ
 		return nil, err
 	}
 
+	// pull in document
 	reader, _, err := s.store.Get(ctx, versionRef.RawContentURI)
 	if err != nil {
 		return nil, err
@@ -158,7 +161,7 @@ func (s *Service) InitiateDocumentChunking(ctx context.Context, req InitiateRequ
 		DocumentID:        req.DocumentID,
 		DocumentVersionID: versionRef.DocumentVersionID,
 		Content:           string(payload),
-		Strategy:          req.Strategy,
+		Strategy:          resolveDocumentStrategy(req.Strategy, versionRef.RawContentURI),
 		MaxRunes:          req.MaxRunes,
 		OverlapRunes:      req.OverlapRunes,
 		Separators:        req.Separators,
@@ -168,7 +171,7 @@ func (s *Service) InitiateDocumentChunking(ctx context.Context, req InitiateRequ
 		return nil, err
 	}
 
-	resolved := req.Strategy
+	resolved := resolveDocumentStrategy(req.Strategy, versionRef.RawContentURI)
 	if resolved == "" {
 		resolved = chunking.Strategy(s.strategy)
 	}
@@ -262,6 +265,8 @@ func ParseLanguageHints(values []string) ([]chunking.Language, error) {
 	return hints, nil
 }
 
+// creates chunks from a DocumentRequest
+// kicks off embedding process as well
 func (s *Service) handle(ctx context.Context, req DocumentRequest) (int, error) {
 	if s.cache == nil {
 		return 0, fmt.Errorf("cache layer is required")
@@ -380,6 +385,7 @@ func (s *Service) handle(ctx context.Context, req DocumentRequest) (int, error) 
 	return len(stored), nil
 }
 
+// resolveChunker accepts a DocumentRequest and instantiates and returns the Chunker model, the stra
 func (s *Service) resolveChunker(req DocumentRequest) (chunking.Chunker, string, error) {
 	if req.Strategy == "" &&
 		req.MaxRunes <= 0 &&
@@ -431,6 +437,19 @@ func normalizeHints(hints []chunking.Language) []chunking.Language {
 		normalized = append(normalized, chunking.Language(value))
 	}
 	return normalized
+}
+
+func resolveDocumentStrategy(requested chunking.Strategy, rawContentURI string) chunking.Strategy {
+	strategy := requested
+	if isMarkdownURI(rawContentURI) && (strategy == "" || strategy == chunking.StrategyFixed) {
+		return chunking.StrategyMarkdown
+	}
+	return strategy
+}
+
+func isMarkdownURI(rawContentURI string) bool {
+	ext := strings.ToLower(filepath.Ext(strings.TrimSpace(rawContentURI)))
+	return ext == ".md" || ext == ".mdx"
 }
 
 func hashContent(content string) string {

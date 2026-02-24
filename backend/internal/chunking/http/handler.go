@@ -36,11 +36,6 @@ func (h *Handler) InitiateDocumentChunking(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	payload.Strategy = strings.TrimSpace(payload.Strategy)
-	if payload.Strategy == "" {
-		logger.Warn("chunking request missing strategy", "kb_id", kbID, "document_id", documentID)
-		writeError(w, http.StatusBadRequest, "strategy is required")
-		return
-	}
 
 	languageHints, err := chunkservice.ParseLanguageHints(payload.LanguageHints)
 	if err != nil {

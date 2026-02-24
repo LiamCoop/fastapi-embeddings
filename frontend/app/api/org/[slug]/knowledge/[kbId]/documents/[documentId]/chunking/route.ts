@@ -25,19 +25,21 @@ export async function POST(
     language_hints?: string[];
   } | null;
 
-  const strategy = payload?.strategy?.trim() || "fixed";
+  const strategy = payload?.strategy?.trim() || "";
+  const upstreamPayload = {
+    strategy,
+    max_runes: payload?.max_runes ?? 0,
+    overlap_runes: payload?.overlap_runes ?? 0,
+    separators: payload?.separators ?? [],
+    language_hints: payload?.language_hints ?? [],
+  };
+
   const upstreamRes = await fetch(`${apiBaseUrl()}/kb/${kbId}/documents/${documentId}/chunking`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({
-      strategy,
-      max_runes: payload?.max_runes ?? 0,
-      overlap_runes: payload?.overlap_runes ?? 0,
-      separators: payload?.separators ?? [],
-      language_hints: payload?.language_hints ?? [],
-    }),
+    body: JSON.stringify(upstreamPayload),
     cache: "no-store",
   });
 

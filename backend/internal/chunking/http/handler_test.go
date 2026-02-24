@@ -71,7 +71,7 @@ func newTestHandler() *Handler {
 	return NewHandler(service)
 }
 
-func TestHandlerRequiresStrategy(t *testing.T) {
+func TestHandlerAllowsEmptyStrategy(t *testing.T) {
 	h := NewRouter(newTestHandler().service)
 	req := httptest.NewRequest(http.MethodPost, "/v1/kb/kb-1/documents/doc-1/chunking", bytes.NewReader([]byte(`{}`)))
 	req.Header.Set("Content-Type", "application/json")
@@ -79,8 +79,8 @@ func TestHandlerRequiresStrategy(t *testing.T) {
 
 	h.ServeHTTP(w, req)
 
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected status 400, got %d", w.Code)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("expected status 202, got %d", w.Code)
 	}
 }
 

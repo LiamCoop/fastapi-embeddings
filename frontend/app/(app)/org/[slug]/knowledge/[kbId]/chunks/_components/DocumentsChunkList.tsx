@@ -34,7 +34,7 @@ export function DocumentsChunkList({
       const res = await fetch(knowledgeDocumentChunkingApiPath(slug, kbId, documentId), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ strategy: "fixed" }),
+        body: JSON.stringify({}),
       });
       if (!res.ok) {
         const payload = (await res.json().catch(() => null)) as { error?: string } | null;
