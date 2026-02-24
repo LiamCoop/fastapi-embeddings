@@ -191,6 +191,10 @@ export function knowledgeDocumentsApiPath(slug: string, kbId: string): string {
   return `/api/org/${slug}/knowledge/${kbId}/documents`;
 }
 
+export function knowledgeBaseApiPath(slug: string, kbId: string): string {
+  return `/api/org/${slug}/knowledge/${kbId}`;
+}
+
 export function knowledgeDocumentChunkingApiPath(
   slug: string,
   kbId: string,
@@ -242,6 +246,19 @@ export async function fetchOrgKnowledgeDocuments(
   const path = knowledgeDocumentsApiPath(slug, kbId);
   const url = options?.baseUrl ? `${options.baseUrl}${path}` : path;
   return fetchJson<IngestionResponse>(url, options?.init);
+}
+
+export async function deleteOrgKnowledgeBase(
+  slug: string,
+  kbId: string,
+  options?: { baseUrl?: string; init?: RequestInit },
+): Promise<{ id: string; deleted: boolean; deleted_objects: number }> {
+  const path = knowledgeBaseApiPath(slug, kbId);
+  const url = options?.baseUrl ? `${options.baseUrl}${path}` : path;
+  return fetchJson<{ id: string; deleted: boolean; deleted_objects: number }>(url, {
+    method: "DELETE",
+    ...(options?.init ?? {}),
+  });
 }
 
 export async function fetchOrgKnowledgeChunksByDocument(
