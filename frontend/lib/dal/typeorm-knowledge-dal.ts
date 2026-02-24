@@ -122,6 +122,26 @@ export class TypeormKnowledgeDal implements KnowledgeDal {
     };
   }
 
+  async listRawContentUrisForKb(kbId: string): Promise<string[]> {
+    const db = await this.db();
+    const rows = (await db.query(
+      `
+        SELECT DISTINCT raw_content_uri
+        FROM document_versions
+        WHERE kb_id = $1
+      `,
+      [kbId],
+    )) as Array<{ raw_content_uri: string }>;
+
+    return rows.map((row) => row.raw_content_uri);
+  }
+
+  async deleteKnowledgeBaseById(kbId: string): Promise<boolean> {
+    const db = await this.db();
+    const result = await db.getRepository(KnowledgeBase).delete({ id: kbId });
+    return Boolean(result.affected);
+  }
+
   async getDocumentIdByKbPath(kbId: string, path: string): Promise<string | null> {
     const db = await this.db();
     const document = await db.getRepository(Document).findOne({ where: { kbId, path }, select: ["id"] });

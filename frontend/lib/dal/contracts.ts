@@ -16,6 +16,8 @@ export interface KnowledgeDal {
   listKnowledgeBasesForOrg(orgId: string, orgSlug: string): Promise<KnowledgeBaseRecord[]>;
   createKnowledgeBase(name: string, metadata: Record<string, unknown>): Promise<KnowledgeBaseRecord>;
   getKnowledgeBaseById(id: string): Promise<KnowledgeBaseRecord | null>;
+  listRawContentUrisForKb(kbId: string): Promise<string[]>;
+  deleteKnowledgeBaseById(kbId: string): Promise<boolean>;
   getDocumentIdByKbPath(kbId: string, path: string): Promise<string | null>;
   createOrUpdateDocumentAndInsertVersion(input: CreateOrUpdateDocumentInput): Promise<CreatedDocumentResult>;
   deleteDocumentById(kbId: string, documentId: string): Promise<boolean>;

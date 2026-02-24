@@ -1,9 +1,11 @@
+import { DeleteCorpusCard } from "./_components/DeleteCorpusCard";
+
 export default async function KbSettingsPage({
   params,
 }: {
   params: Promise<{ slug: string; kbId: string }>;
 }) {
-  const { kbId } = await params;
+  const { slug, kbId } = await params;
 
   return (
     <div className="px-8 py-10 space-y-8">
@@ -28,15 +30,7 @@ export default async function KbSettingsPage({
           </div>
         </div>
 
-        <div className="rounded-xl border border-border bg-card p-6 md:col-span-2">
-          <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Danger Zone</p>
-          <div className="mt-4 rounded-lg border border-dashed border-destructive/40 py-8 text-center">
-            <p className="text-sm text-muted-foreground/60">Delete corpus</p>
-            <p className="mt-1 text-xs text-muted-foreground/40">
-              This action cannot be undone.
-            </p>
-          </div>
-        </div>
+        <DeleteCorpusCard slug={slug} kbId={kbId} />
       </div>
     </div>
   );

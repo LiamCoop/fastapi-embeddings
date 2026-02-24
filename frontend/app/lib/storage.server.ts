@@ -29,11 +29,19 @@ function encodePath(path: string): string {
     .join("/");
 }
 
-export async function uploadFileToStorage(
+type SignedStorageRequest = {
+  requestUrl: URL;
+  authorization: string;
+  amzDate: string;
+  payloadHash: string;
+};
+
+function buildSignedStorageRequest(
+  method: "PUT" | "DELETE",
   key: string,
-  body: Buffer,
-  contentType: string,
-): Promise<string> {
+  payloadHash: string,
+  now: Date,
+): SignedStorageRequest {
   const endpoint = getEnv("RAILWAY_BUCKET_ENDPOINT");
   const bucket = getEnv("RAILWAY_BUCKET_NAME");
   const region = process.env.RAILWAY_BUCKET_REGION ?? "auto";
@@ -41,10 +49,8 @@ export async function uploadFileToStorage(
   const secretAccessKey = getEnv("RAILWAY_BUCKET_SECRET_ACCESS_KEY");
 
   const baseUrl = new URL(endpoint);
-  const now = new Date();
   const amzDate = toAmzDate(now);
   const dateStamp = amzDate.slice(0, 8);
-  const payloadHash = hashSHA256Hex(body);
 
   const keyPath = key.replace(/^\/+/, "");
   const endpointPrefix = baseUrl.pathname.replace(/^\/+|\/+$/g, "");
@@ -63,7 +69,7 @@ export async function uploadFileToStorage(
 
   const signedHeaders = "host;x-amz-content-sha256;x-amz-date";
   const canonicalRequest = [
-    "PUT",
+    method,
     canonicalUri,
     "",
     canonicalHeaders,
@@ -93,6 +99,24 @@ export async function uploadFileToStorage(
   const requestUrl = new URL(baseUrl.toString());
   requestUrl.pathname = canonicalUri;
 
+  return {
+    requestUrl,
+    authorization,
+    amzDate,
+    payloadHash,
+  };
+}
+
+export async function uploadFileToStorage(
+  key: string,
+  body: Buffer,
+  contentType: string,
+): Promise<string> {
+  const payloadHash = hashSHA256Hex(body);
+  const { requestUrl, authorization, amzDate } = buildSignedStorageRequest("PUT", key, payloadHash, new Date());
+  const bucket = getEnv("RAILWAY_BUCKET_NAME");
+  const keyPath = key.replace(/^\/+/, "");
+
   const response = await fetch(requestUrl, {
     method: "PUT",
     headers: {
@@ -110,4 +134,57 @@ export async function uploadFileToStorage(
   }
 
   return `s3://${bucket}/${keyPath}`;
+}
+
+function parseS3Uri(uri: string): { bucket: string; key: string } {
+  if (!uri.startsWith("s3://")) {
+    throw new Error(`Unsupported storage URI: ${uri}`);
+  }
+
+  const withoutScheme = uri.slice("s3://".length);
+  const slashIndex = withoutScheme.indexOf("/");
+  if (slashIndex === -1) {
+    throw new Error(`Invalid storage URI (missing object key): ${uri}`);
+  }
+
+  const bucket = withoutScheme.slice(0, slashIndex);
+  const key = withoutScheme.slice(slashIndex + 1);
+  return { bucket, key };
+}
+
+export async function deleteFileFromStorageUri(uri: string): Promise<void> {
+  const { bucket, key } = parseS3Uri(uri);
+  const configuredBucket = getEnv("RAILWAY_BUCKET_NAME");
+
+  if (bucket !== configuredBucket) {
+    throw new Error(
+      `Storage bucket mismatch for delete: uri bucket ${bucket} does not match configured bucket ${configuredBucket}`,
+    );
+  }
+
+  const emptyPayloadHash = hashSHA256Hex("");
+  const { requestUrl, authorization, amzDate } = buildSignedStorageRequest(
+    "DELETE",
+    key,
+    emptyPayloadHash,
+    new Date(),
+  );
+
+  const response = await fetch(requestUrl, {
+    method: "DELETE",
+    headers: {
+      Authorization: authorization,
+      "x-amz-content-sha256": emptyPayloadHash,
+      "x-amz-date": amzDate,
+    },
+  });
+
+  if (response.status === 404 || response.status === 204) {
+    return;
+  }
+
+  if (!response.ok) {
+    const bodyText = await response.text();
+    throw new Error(`Bucket delete failed (${response.status}): ${bodyText.slice(0, 200)}`);
+  }
 }
