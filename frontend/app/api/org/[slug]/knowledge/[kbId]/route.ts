@@ -6,7 +6,7 @@ import {
   knowledgeKbTag,
   knowledgeOrgTag,
 } from "@/app/lib/knowledge-cache";
-import { getKnowledgeDal } from "@/lib/dal";
+import { prisma } from "@/lib/prisma";
 import { revalidateTag } from "next/cache";
 
 export async function DELETE(
@@ -19,24 +19,39 @@ export async function DELETE(
   }
 
   try {
-    const dal = getKnowledgeDal();
-    const org = await dal.getOrganizationBySlug(slug);
+    const org = await prisma.organization.findUnique({
+      where: { slug },
+      select: { id: true, slug: true },
+    });
     if (!org) {
       return Response.json({ error: "Organization not found" }, { status: 404 });
     }
 
-    const kb = await dal.getKnowledgeBaseById(kbId);
+    const kb = await prisma.knowledgeBase.findUnique({
+      where: { id: kbId },
+      select: { metadata: true },
+    });
     if (!kb) {
       return Response.json({ error: "Knowledge base not found" }, { status: 404 });
     }
 
-    const kbOrgId = kb.metadata?.organization_id;
-    const kbOrgSlug = kb.metadata?.org_slug;
+    const metadata =
+      kb.metadata && typeof kb.metadata === "object" && !Array.isArray(kb.metadata)
+        ? (kb.metadata as Record<string, unknown>)
+        : {};
+    const kbOrgId = metadata.organization_id;
+    const kbOrgSlug = metadata.org_slug;
     if (kbOrgId !== org.id && kbOrgSlug !== org.slug) {
       return Response.json({ error: "Knowledge base not found" }, { status: 404 });
     }
 
-    const rawContentUris = await dal.listRawContentUrisForKb(kbId);
+    const rawContentUris = (
+      await prisma.documentVersion.findMany({
+        where: { kbId },
+        distinct: ["rawContentUri"],
+        select: { rawContentUri: true },
+      })
+    ).map((row) => row.rawContentUri);
     const uniqueUris = [...new Set(rawContentUris)].filter((value) => value.startsWith("s3://"));
 
     const deleteResults = await Promise.allSettled(uniqueUris.map((uri) => deleteFileFromStorageUri(uri)));
@@ -45,7 +60,7 @@ export async function DELETE(
       throw new Error(`Failed to delete ${failedDeletes.length} object(s) from storage`);
     }
 
-    const deleted = await dal.deleteKnowledgeBaseById(kbId);
+    const deleted = (await prisma.knowledgeBase.deleteMany({ where: { id: kbId } })).count > 0;
     if (!deleted) {
       return Response.json({ error: "Knowledge base not found" }, { status: 404 });
     }

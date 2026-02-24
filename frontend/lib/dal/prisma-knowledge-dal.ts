@@ -110,21 +110,6 @@ export class PrismaKnowledgeDal implements KnowledgeDal {
     };
   }
 
-  async listRawContentUrisForKb(kbId: string): Promise<string[]> {
-    const rows = await prisma.documentVersion.findMany({
-      where: { kbId },
-      distinct: ["rawContentUri"],
-      select: { rawContentUri: true },
-    });
-
-    return rows.map((row) => row.rawContentUri);
-  }
-
-  async deleteKnowledgeBaseById(kbId: string): Promise<boolean> {
-    const deleted = await prisma.knowledgeBase.deleteMany({ where: { id: kbId } });
-    return deleted.count > 0;
-  }
-
   async getDocumentIdByKbPath(kbId: string, path: string): Promise<string | null> {
     const document = await prisma.document.findFirst({
       where: { kbId, path },

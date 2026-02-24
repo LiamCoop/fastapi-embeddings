@@ -1,4 +1,6 @@
 import { DeleteCorpusCard } from "./_components/DeleteCorpusCard";
+import { loadOrgKnowledgeDocuments } from "@/app/lib/org-knowledge.server";
+import { notFound } from "next/navigation";
 
 export default async function KbSettingsPage({
   params,
@@ -6,6 +8,13 @@ export default async function KbSettingsPage({
   params: Promise<{ slug: string; kbId: string }>;
 }) {
   const { slug, kbId } = await params;
+  const data = await loadOrgKnowledgeDocuments(slug, kbId);
+
+  if (!data) {
+    notFound();
+  }
+
+  const corpusName = data.knowledge_base.name;
 
   return (
     <div className="px-8 py-10 space-y-8">
@@ -30,7 +39,7 @@ export default async function KbSettingsPage({
           </div>
         </div>
 
-        <DeleteCorpusCard slug={slug} kbId={kbId} />
+        <DeleteCorpusCard slug={slug} kbId={kbId} corpusName={corpusName} />
       </div>
     </div>
   );

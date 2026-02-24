@@ -8,9 +8,10 @@ import { useState } from "react";
 type DeleteCorpusCardProps = {
   slug: string;
   kbId: string;
+  corpusName: string;
 };
 
-export function DeleteCorpusCard({ slug, kbId }: DeleteCorpusCardProps) {
+export function DeleteCorpusCard({ slug, kbId, corpusName }: DeleteCorpusCardProps) {
   const router = useRouter();
   const [isConfirming, setIsConfirming] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -31,13 +32,15 @@ export function DeleteCorpusCard({ slug, kbId }: DeleteCorpusCardProps) {
     }
   }
 
-  const canConfirmDelete = confirmationText.trim() === kbId;
+  const canConfirmDelete = confirmationText.trim() === corpusName;
 
   return (
     <div className="rounded-xl border border-border bg-card p-6 md:col-span-2">
       <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Danger Zone</p>
       <div className="mt-4 rounded-lg border border-dashed border-destructive/40 p-5">
-        <p className="text-sm font-medium text-foreground">Delete corpus</p>
+        <p className="text-sm font-medium text-foreground">
+          Delete Corpus <span className="font-mono">"{corpusName}"</span>
+        </p>
         <p className="mt-1 text-xs text-muted-foreground/60">
           This permanently deletes the corpus, all documents, chunks, embeddings, and stored source files.
         </p>
@@ -47,7 +50,7 @@ export function DeleteCorpusCard({ slug, kbId }: DeleteCorpusCardProps) {
         {isConfirming ? (
           <div className="mt-4 space-y-3">
             <label htmlFor="delete-corpus-confirm" className="block text-xs text-muted-foreground">
-              Type the corpus ID to confirm deletion.
+              Type "{corpusName}" to confirm deletion.
             </label>
             <input
               id="delete-corpus-confirm"
@@ -56,7 +59,7 @@ export function DeleteCorpusCard({ slug, kbId }: DeleteCorpusCardProps) {
               onChange={(event) => {
                 setConfirmationText(event.target.value);
               }}
-              placeholder={kbId}
+              placeholder={corpusName}
               className="h-9 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]"
               disabled={isDeleting}
             />
