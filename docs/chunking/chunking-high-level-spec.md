@@ -1,5 +1,7 @@
 # Markdown Chunker — High-Level Design Spec (Revised)
 
+Note: this is the target/high-level design document. For current behavior implemented in code, see `docs/chunking-markdown-implementation.md`.
+
 ## Goals
 
 Design a fast, flexible chunker for Markdown/MDX docs that:
