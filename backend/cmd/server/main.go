@@ -17,9 +17,7 @@ import (
 	chunkhttp "ragtime-backend/internal/chunking/http"
 	chunkrepo "ragtime-backend/internal/chunking/repository"
 	chunkservice "ragtime-backend/internal/chunking/service"
-	"ragtime-backend/internal/document"
 	"ragtime-backend/internal/embedding"
-	"ragtime-backend/internal/ingestion"
 	"ragtime-backend/internal/logger"
 	"ragtime-backend/internal/objectstore"
 	retrievalcache "ragtime-backend/internal/retrieval/cache"
@@ -77,12 +75,9 @@ func main() {
 }
 
 type appServices struct {
-	documents      *document.Service
-	embeddings     *embedding.Service
-	ingestion      *ingestion.Service
-	embeddingQueue chan embedding.EmbedChunkRequest
-	chunking       *chunkservice.Service
-	retrieval      *retrievalservice.Service
+	embeddings *embedding.Service
+	chunking   *chunkservice.Service
+	retrieval  *retrievalservice.Service
 }
 
 func newServices(db *sql.DB, store objectstore.Client) appServices {
@@ -95,7 +90,6 @@ func newServices(db *sql.DB, store objectstore.Client) appServices {
 	embeddingQueue := make(chan embedding.EmbedChunkRequest, 128)
 
 	embedService := embedding.NewServiceWithPostgres(db, embedder, modelID, embeddingQueue)
-	ingestionService := ingestion.NewServiceWithPostgres(db, store, embedService)
 	go func() {
 		if err := embedService.Run(context.Background()); err != nil && !errors.Is(err, context.Canceled) {
 			logger.Error("embedding worker stopped", "error", err)
@@ -108,12 +102,9 @@ func newServices(db *sql.DB, store objectstore.Client) appServices {
 	retrievalCache := retrievalcache.NewNoopLayer(retrievalRepo)
 
 	return appServices{
-		documents:      document.NewServiceWithPostgres(db, store, chunkingCh),
-		chunking:       chunkservice.New(chunkCache, nil, chunkingCh, store, embedService),
-		embeddings:     embedService,
-		ingestion:      ingestionService,
-		embeddingQueue: embeddingQueue,
-		retrieval:      retrievalservice.New(retrievalCache, embedder),
+		chunking:   chunkservice.New(chunkCache, nil, chunkingCh, store, embedService),
+		embeddings: embedService,
+		retrieval:  retrievalservice.New(retrievalCache, embedder),
 	}
 }
 
