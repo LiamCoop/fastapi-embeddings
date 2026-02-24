@@ -10,6 +10,22 @@ type UploadZoneProps = {
   kbId: string;
 };
 
+type BulkFailure = {
+  path: string;
+  reason: string;
+};
+
+type BulkProgress = {
+  total: number;
+  completed: number;
+  uploaded: number;
+  inFlight: number;
+  currentPath: string | null;
+  failures: BulkFailure[];
+};
+
+const BULK_UPLOAD_CONCURRENCY = 4;
+
 export function UploadZone({ slug, kbId }: UploadZoneProps) {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -21,16 +37,12 @@ export function UploadZone({ slug, kbId }: UploadZoneProps) {
   const [isUploading, setIsUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [bulkProgress, setBulkProgress] = useState<BulkProgress | null>(null);
 
   const directoryUploadInputProps = {
     webkitdirectory: "",
     directory: "",
   } as unknown as InputHTMLAttributes<HTMLInputElement>;
-
-  function isMarkdownFile(file: File): boolean {
-    const lower = file.name.toLowerCase();
-    return lower.endsWith(".md") || lower.endsWith(".mdx");
-  }
 
   function directoryRelativePath(file: File): string {
     const raw = (file as File & { webkitRelativePath?: string }).webkitRelativePath ?? file.name;
@@ -67,6 +79,7 @@ export function UploadZone({ slug, kbId }: UploadZoneProps) {
     setIsUploading(true);
     setError(null);
     setSuccessMessage(null);
+    setBulkProgress(null);
 
     try {
       await uploadOne(file, requestedPath);
@@ -85,42 +98,101 @@ export function UploadZone({ slug, kbId }: UploadZoneProps) {
     setIsUploading(true);
     setError(null);
     setSuccessMessage(null);
+    setBulkProgress(null);
 
     const allFiles = Array.from(files);
-    const markdownFiles = allFiles.filter(isMarkdownFile);
-    const skippedCount = allFiles.length - markdownFiles.length;
-
-    if (markdownFiles.length === 0) {
+    if (allFiles.length === 0) {
       setIsUploading(false);
-      setError("No markdown files found in selected directory.");
+      setError("No files found in selected directory.");
       return;
     }
 
-    let uploadedCount = 0;
-    const failed: string[] = [];
+    const uploadTasks = allFiles.map((file) => ({
+      file,
+      relativePath: directoryRelativePath(file),
+    }));
 
-    for (const file of markdownFiles) {
-      const relativePath = directoryRelativePath(file);
-      try {
-        await uploadOne(file, relativePath);
-        uploadedCount++;
-      } catch (err) {
-        const reason = err instanceof Error ? err.message : "Upload failed";
-        failed.push(`${relativePath} (${reason})`);
+    setBulkProgress({
+      total: uploadTasks.length,
+      completed: 0,
+      uploaded: 0,
+      inFlight: 0,
+      currentPath: null,
+      failures: [],
+    });
+
+    let nextIndex = 0;
+    let uploadedCount = 0;
+    const failures: BulkFailure[] = [];
+    const workerCount = Math.min(BULK_UPLOAD_CONCURRENCY, uploadTasks.length);
+
+    async function worker() {
+      while (nextIndex < uploadTasks.length) {
+        const currentIndex = nextIndex;
+        nextIndex += 1;
+        const task = uploadTasks[currentIndex];
+        if (!task) {
+          continue;
+        }
+
+        setBulkProgress((previous) => {
+          if (!previous) {
+            return previous;
+          }
+          return {
+            ...previous,
+            inFlight: previous.inFlight + 1,
+            currentPath: task.relativePath,
+          };
+        });
+
+        try {
+          await uploadOne(task.file, task.relativePath);
+          uploadedCount += 1;
+          setBulkProgress((previous) => {
+            if (!previous) {
+              return previous;
+            }
+            return {
+              ...previous,
+              completed: previous.completed + 1,
+              uploaded: previous.uploaded + 1,
+              inFlight: Math.max(0, previous.inFlight - 1),
+            };
+          });
+        } catch (err) {
+          const reason = err instanceof Error ? err.message : "Upload failed";
+          failures.push({ path: task.relativePath, reason });
+          setBulkProgress((previous) => {
+            if (!previous) {
+              return previous;
+            }
+            return {
+              ...previous,
+              completed: previous.completed + 1,
+              inFlight: Math.max(0, previous.inFlight - 1),
+              failures: [...previous.failures, { path: task.relativePath, reason }],
+            };
+          });
+        }
       }
     }
 
+    await Promise.all(Array.from({ length: workerCount }, () => worker()));
+
     router.refresh();
 
-    if (failed.length > 0) {
-      const preview = failed.slice(0, 3).join("; ");
-      const extra = failed.length > 3 ? ` (+${failed.length - 3} more)` : "";
-      setError(`Failed to upload ${failed.length} markdown file(s): ${preview}${extra}`);
+    const failureCount = failures.length;
+    if (failureCount > 0) {
+      const preview = failures
+        .slice(0, 3)
+        .map((failedUpload) => `${failedUpload.path} (${failedUpload.reason})`)
+        .join("; ");
+      const extra = failureCount > 3 ? ` (+${failureCount - 3} more)` : "";
+      setError(`Failed to upload ${failureCount} file(s): ${preview}${extra}`);
     }
 
-    setSuccessMessage(
-      `Uploaded and stored ${uploadedCount} markdown file(s). Skipped ${skippedCount} non-markdown file(s).`,
-    );
+    setSuccessMessage(`Uploaded and stored ${uploadedCount} of ${uploadTasks.length} file(s).`);
     setIsUploading(false);
   }
 
@@ -156,11 +228,18 @@ export function UploadZone({ slug, kbId }: UploadZoneProps) {
     if (isUploading) {
       return;
     }
-    const nextFile = event.dataTransfer.files?.[0];
-    if (!nextFile) {
+    const files = event.dataTransfer.files;
+    if (!files || files.length === 0) {
       return;
     }
-    onFileSelected(nextFile);
+    if (files.length > 1) {
+      void uploadDirectory(files);
+      return;
+    }
+    const nextFile = files[0];
+    if (nextFile) {
+      onFileSelected(nextFile);
+    }
   }
 
   function onSubmitUpload() {
@@ -288,6 +367,35 @@ export function UploadZone({ slug, kbId }: UploadZoneProps) {
               </>
             )}
           </div>
+
+          {bulkProgress ? (
+            <div className="space-y-2 rounded-lg border border-border bg-secondary/30 p-3">
+              <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                <p>
+                  Uploading {bulkProgress.completed}/{bulkProgress.total}
+                </p>
+                <p>{bulkProgress.inFlight} in flight</p>
+              </div>
+              <div className="h-1.5 w-full overflow-hidden rounded bg-muted">
+                <div
+                  className="h-full rounded bg-primary transition-all"
+                  style={{
+                    width: `${bulkProgress.total === 0 ? 0 : (bulkProgress.completed / bulkProgress.total) * 100}%`,
+                  }}
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {bulkProgress.currentPath
+                  ? `Current: ${bulkProgress.currentPath}`
+                  : "Preparing uploads..."}
+              </p>
+              {bulkProgress.failures.length > 0 ? (
+                <p className="text-xs text-destructive">
+                  Failures: {bulkProgress.failures.length}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
 
           <div className="flex items-center justify-end gap-2">
             <button
